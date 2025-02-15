@@ -9,7 +9,7 @@ using namespace std;
 mutex mtx;
 
 vector<int> ReadFile(const std::string& InFileName) {   
-    vector<int> numbers;  // Use a vector instead of an array
+    vector<int> numbers;
     ifstream inputFile(InFileName);
     
     if (!inputFile) {  // Check if the file was successfully opened
@@ -25,6 +25,26 @@ vector<int> ReadFile(const std::string& InFileName) {
     inputFile.close();
     return numbers;  // Return the vector
 }
+
+// Recursive function to divide the array using threads
+void divide(vector<int>& numbers, int left, int right, vector<int>& arr) {
+    
+    if (left >= right) {
+        lock_guard<mutex> lock(mtx); // Ensure thread safety when modifying arr (Not sure if needed)
+        arr.push_back(numbers[left]);
+        return;
+    }
+
+    int mid = left + (right - left) / 2;
+    
+    // Create threads to recursively divide left and right halves
+    thread leftThread(divide, ref(numbers), left, mid, ref(arr));
+    leftThread.join();
+    thread rightThread(divide, ref(numbers), mid + 1, right, ref(arr));
+    rightThread.join();
+}
+
+
 
 // Function to merge two sorted subarrays
 void merge(vector<int>& arr, int left, int mid, int right) {
@@ -45,14 +65,52 @@ void merge(vector<int>& arr, int left, int mid, int right) {
     while (j < rightSub.size()) arr[k++] = rightSub[j++];
 }
 
+// Recursive threaded merge sort function
+void mergeSort(vector<int>& arr, int left, int right){
+    if(left >= right) return;
+    
+    int mid = left + (right - left) / 2;
+    
+    thread leftThread(mergeSort, ref(arr), left, mid);
+    thread rightThread(mergeSort, ref(arr), mid + 1, right);
+    
+    leftThread.join();
+    rightThread.join();
+    
+    thread mergeThread(merge,ref(arr), left, mid, right);
+    mergeThread.join();
+    
+}
+
 int main()
 {    
+    
+    vector<int> arr; //To store the base case values
+    
     string filename = "Input.txt";  // Ensure the file exists in the same directory
     vector<int> numbers = ReadFile(filename);//Array of numbers from the file
-    cout << "Sorted array: ";
-    for (int num : numbers)
-        cout << num << " ";
+    
+    cout << "Array dividion starts:\n";
+    thread divideThread(divide, ref(numbers), 0, numbers.size() - 1, ref(arr));
+    divideThread.join(); 
+    
+    cout << "Array division completed.\n";
+    
+    cout << "Base case values stored in arr: ";
+    for (int num : arr) cout << num << " ";
     cout << endl;
+    
+    // Apply multithreaded merge sort
+    thread sortThread(mergeSort, ref(arr), 0, arr.size() - 1);
+    sortThread.join();
+    
+    // Print sorted array
+    cout << "Sorted arr: ";
+    for (int num : arr) cout << num << " ";
+    cout << endl;
+    
+    cout << "Sorting completed.";
+
 
     return 0;
 }
