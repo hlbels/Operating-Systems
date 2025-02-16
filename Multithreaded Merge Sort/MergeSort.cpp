@@ -82,6 +82,30 @@ void mergeSort(vector<int>& arr, int left, int right){
     
 }
 
+void WriteOutputFile(const string& filename, const vector<string>& logEntries, const vector<int>& sortedNumbers) {
+    ofstream outputFile(filename);
+    if (!outputFile) {
+        cerr << "Error opening the output file!" << endl;
+        return;
+    }
+
+    // Write thread execution logs
+    for (const string& entry : logEntries) {
+        outputFile << entry << endl;
+    }
+
+    // Write the final sorted output
+    outputFile << "Final Sorted Output: ";
+    cout << "Final Sorted Output: ";
+    for (size_t i = 0; i < sortedNumbers.size(); i++) {
+        cout << sortedNumbers[i] << (i < sortedNumbers.size() - 1 ? ", " : "\n");
+        outputFile << sortedNumbers[i] << (i < sortedNumbers.size() - 1 ? ", " : "\n");
+    }
+
+    outputFile.close();
+}
+
+
 int main()
 {    
     
