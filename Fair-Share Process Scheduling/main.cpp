@@ -69,34 +69,7 @@ void scheduler() {
 
         while (!readyQueue.empty()) {
             Process* process = readyQueue.front();
-            thread processThread([process, currentTime]() {
-                unique_lock<mutex> lock(queueMutex);
-                cv.wait(lock, [&]() { return !readyQueue.empty() && readyQueue.front() == process; });
-
-                int executionTime = min(timeQuantum, process->remainingTime);
-                outputFile << "Time " << currentTime << ", User " << process->user 
-                        << ", Process " << process->id << ", Started\n";
-                outputFile.flush();
-
-                this_thread::sleep_for(chrono::seconds(executionTime));
-
-                process->remainingTime -= executionTime;
-
-                if (process->remainingTime > 0) {
-                    outputFile << "Time " << currentTime + executionTime 
-                            << ", User " << process->user << ", Process " << process->id << ", Paused\n";
-                    readyQueue.push(process);
-                } else {
-                    outputFile << "Time " << currentTime + executionTime 
-                            << ", User " << process->user << ", Process " << process->id << ", Finished\n";
-                    process->finished = true;
-                }
-
-                outputFile.flush();
-                readyQueue.pop();
-                cv.notify_all();
-            });
-
+            thread processThread(executeProcess, process, currentTime);
             processThread.detach();
         }
 
