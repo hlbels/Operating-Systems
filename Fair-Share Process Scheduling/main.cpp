@@ -52,6 +52,51 @@ int timeQuantum;
 bool allProcessesFinished = false;
 ofstream outputFile("output.txt");
 
+// Function to execute a process
+void executeProcess(Process* process, int& currentTime) {
+    lock_guard<mutex> lock(queueMutex); // Ensure thread safety
+
+    // Determine execution time: full quantum time or remaining time
+    int execTime = min(timeQuantum, process->remainingTime);
+    bool isFirstExecution = (process->remainingTime == process->serviceTime); // If first execution
+
+    // Start or Resume
+    if (isFirstExecution) {
+        cout << "Time " << currentTime << ", User " << process->user 
+             << ", Process " << process->id << ", Started\n";
+        outputFile << "Time " << currentTime << ", User " << process->user 
+                   << ", Process " << process->id << ", Started\n";
+    }
+    
+    cout << "Time " << currentTime << ", User " << process->user 
+         << ", Process " << process->id << ", Resumed\n";
+    outputFile << "Time " << currentTime << ", User " << process->user 
+               << ", Process " << process->id << ", Resumed\n";
+
+    
+    this_thread::sleep_for(chrono::seconds(execTime));
+
+    
+    process->remainingTime -= execTime;
+    currentTime += execTime; 
+
+    if (process->remainingTime > 0) {
+        // Process is paused, but not finished
+        cout << "Time " << currentTime << ", User " << process->user 
+             << ", Process " << process->id << ", Paused\n";
+        outputFile << "Time " << currentTime << ", User " << process->user 
+                   << ", Process " << process->id << ", Paused\n";
+    } else {
+        // Process has finished execution
+        process->finished = true;
+        cout << "Time " << currentTime << ", User " << process->user 
+             << ", Process " << process->id << ", Finished\n";
+        outputFile << "Time " << currentTime << ", User " << process->user 
+                   << ", Process " << process->id << ", Finished\n";
+    }
+}
+
+
 // Scheduler Function - Manages process execution
 void scheduler()
 {
