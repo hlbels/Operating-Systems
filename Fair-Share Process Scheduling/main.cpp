@@ -18,6 +18,7 @@ mutex schedulerMutex;
 condition_variable cv;
 atomic<int> currentTime(1);
 bool allProcessesFinished = false;
+static string lastExecutedUser = "";  // Track the last user who executed the longest
 
 // Process structure
 struct Process {
@@ -84,9 +85,11 @@ void scheduler(int quantum) {
         }
         sort(sortedUsers.begin(), sortedUsers.end());
 
-        if (newCycle) {
-            if (find(sortedUsers.begin(), sortedUsers.end(), "B") != sortedUsers.end()) {
-                rotate(sortedUsers.begin(), find(sortedUsers.begin(), sortedUsers.end(), "B"), sortedUsers.end());
+        // Rotate based on last executed user instead of hardcoded "B"
+        if (newCycle && !lastExecutedUser.empty()) {
+            auto it = find(sortedUsers.begin(), sortedUsers.end(), lastExecutedUser);
+            if (it != sortedUsers.end()) {
+                rotate(sortedUsers.begin(), it, sortedUsers.end());
             }
         }
 
@@ -121,6 +124,9 @@ void scheduler(int quantum) {
                     process->finished = true;
                     logEvent(currentTime, process->user, process->id, "Finished");
                 }
+
+                // Track last executed user to ensure fairness in next cycle
+                lastExecutedUser = user;
             }
         }
 
