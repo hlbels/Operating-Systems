@@ -53,7 +53,6 @@ void logEvent(int time, const string& user, int processID, const string& event) 
     cout << "Time " << time << ", User " << user << ", Process " << processID << ", " << event << endl;
 }
 
-// Scheduler function
 void scheduler(int quantum) {
     while (!allProcessesFinished) {
         unique_lock<mutex> lock(schedulerMutex);
@@ -85,15 +84,16 @@ void scheduler(int quantum) {
         }
         sort(sortedUsers.begin(), sortedUsers.end());
 
-        // Rotate based on last executed user instead of hardcoded "B"
-        if (newCycle && !lastExecutedUser.empty()) {
+        // Rotate dynamically after each process execution
+        if (!lastExecutedUser.empty()) {
             auto it = find(sortedUsers.begin(), sortedUsers.end(), lastExecutedUser);
-            if (it != sortedUsers.end()) {
-                rotate(sortedUsers.begin(), it, sortedUsers.end());
+            if (it != sortedUsers.end() && it + 1 != sortedUsers.end()) {
+                rotate(sortedUsers.begin(), it + 1, sortedUsers.end());
             }
         }
 
-        for (const auto& user : sortedUsers) {
+        for (auto it = sortedUsers.begin(); it != sortedUsers.end(); ++it) {
+            string user = *it;
             vector<Process*>& processes = userProcesses[user];
 
             sort(processes.begin(), processes.end(), [](Process* a, Process* b) {
@@ -101,13 +101,13 @@ void scheduler(int quantum) {
             });
 
             int processShare = userShare / processes.size();
-            if (processShare == 0) continue; // **Fix: Skip scheduling if no time is available**
+            if (processShare == 0) continue;
 
             for (auto& process : processes) {
                 if (process->finished) continue;
 
                 int executionTime = min(process->remainingTime, processShare);
-                if (executionTime == 0) continue; // **Fix: Ensure process actually runs**
+                if (executionTime == 0) continue;
 
                 if (!process->started) {
                     logEvent(currentTime, process->user, process->id, "Started");
@@ -125,9 +125,14 @@ void scheduler(int quantum) {
                     logEvent(currentTime, process->user, process->id, "Finished");
                 }
 
-                // Track last executed user to ensure fairness in next cycle
+                // **Update lastExecutedUser after every process execution**
                 lastExecutedUser = user;
             }
+        }
+
+        // Ensure fairness by rotating users at the end of the cycle
+        if (!sortedUsers.empty()) {
+            rotate(sortedUsers.begin(), sortedUsers.begin() + 1, sortedUsers.end());
         }
 
         allProcessesFinished = true;
