@@ -73,10 +73,10 @@ void executeProcess(Process* process, int& currentTime) {
     outputFile << "Time " << currentTime << ", User " << process->user 
                << ", Process " << process->id << ", Resumed\n";
 
-    
+    // Sleep for execTime seconds
     this_thread::sleep_for(chrono::seconds(execTime));
 
-    
+    // Update process state
     process->remainingTime -= execTime;
     currentTime += execTime; 
 
