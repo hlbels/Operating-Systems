@@ -6,190 +6,198 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
-#include <map>
 #include <chrono>
+#include <atomic>
+#include <map>
 #include <algorithm>
 
 using namespace std;
 
-// Process class representing a single process
-class Process
-{
-public:
+// Global synchronization variables
+mutex schedulerMutex;
+condition_variable cv;
+atomic<int> currentTime(1);
+bool allProcessesFinished = false;
+static string lastExecutedUser = "";  // Track the last user who executed the longest
+
+// Process structure
+struct Process {
     string user;
-    int id, readyTime, serviceTime, remainingTime;
+    int id;
+    int readyTime;
+    int serviceTime;
+    int remainingTime;
+    bool started = false;
     bool finished = false;
 
-    // Constructor to initialize process attributes
-    Process(string user, int id, int readyTime, int serviceTime)
-        : user(user), id(id), readyTime(readyTime), serviceTime(serviceTime), remainingTime(serviceTime) {}
+    Process(string u, int i, int r, int s) 
+        : user(u), id(i), readyTime(r), serviceTime(s), remainingTime(s) {}
 };
 
-// User class representing a user who owns multiple processes
-class User
-{
-public:
-    string name;                 // Name of the user
-    vector<Process *> processes; // List of processes owned by the user
-    int No_Processes;
-
-    // Constructor to initialize the user's name
-    User(string name, int No_Processes) : name(name), No_Processes(No_Processes) {}
-
-    // Adds a process to the user's process list
-    void addProcess(Process *process)
-    {
-        processes.push_back(process);
-    }
+// User structure
+struct User {
+    string name;
+    vector<Process*> processes;
 };
 
-// Global Variables
+// Global variables
 vector<User> users;
-queue<Process *> readyQueue;
-mutex queueMutex;
-condition_variable cv;
-int timeQuantum;
-bool allProcessesFinished = false;
-ofstream outputFile("output.txt");
+mutex outputMutex;
+ofstream outputFile;
 
-// Scheduler Function - Manages process execution
-void scheduler()
-{
-    int currentTime = 1; // Keeps track of the current simulation time
-    while (!allProcessesFinished)
-    {
-        {
-            lock_guard<mutex> lock(queueMutex); // Lock to ensure safe access to the queue
-            queue<Process *> newQueue;
-            swap(readyQueue, newQueue); // Clear readyQueue by swapping with an empty queue
+// Function to log events
+void logEvent(int time, const string& user, int processID, const string& event) {
+    lock_guard<mutex> lock(outputMutex);
+    outputFile << "Time " << time << ", User " << user << ", Process " << processID << ", " << event << endl;
+    outputFile.flush();
+    cout << "Time " << time << ", User " << user << ", Process " << processID << ", " << event << endl;
+}
 
-            // Iterate over all users to find processes that are ready to execute
-            for (auto &user : users)
-            {
-                vector<Process *> readyProcesses; // Store processes that are ready at currentTime
-                for (auto *process : user.processes)
-                {
-                    if (!process->finished && process->readyTime <= currentTime)
-                        readyProcesses.push_back(process);
-                }
+void scheduler(int quantum) {
+    while (!allProcessesFinished) {
+        unique_lock<mutex> lock(schedulerMutex);
 
-                // Distribute time quantum among the user's ready processes
-                int userQuantum = readyProcesses.empty() ? 0 : timeQuantum / readyProcesses.size();
+        bool newCycle = (currentTime - 1) % quantum == 0;
 
-                // Add ready processes to the scheduling queue
-                for (auto *process : readyProcesses)
-                {
-                    readyQueue.push(process);
+        // Identify users with ready processes
+        map<string, vector<Process*>> userProcesses;
+        for (auto& user : users) {
+            for (auto& process : user.processes) {
+                if (!process->finished && process->readyTime <= currentTime) {
+                    userProcesses[user.name].push_back(process);
                 }
             }
         }
 
-        // Execute all processes in the ready queue
-        while (!readyQueue.empty())
-        {
-            Process *process = readyQueue.front();                      // Get the process at the front of the queue
-            thread processThread(executeProcess, process, currentTime); // Execute
-            processThread.detach();                                     // Detach thread to run independently
+        if (userProcesses.empty()) {
+            currentTime++;
+            this_thread::sleep_for(chrono::seconds(1));
+            continue;
         }
 
-        this_thread::sleep_for(chrono::seconds(1)); // Simulate time progression in the scheduler
-        currentTime++;
+        int activeUsers = userProcesses.size();
+        int userShare = quantum / activeUsers;
 
-        // Check if all processes have finished execution
+        vector<string> sortedUsers;
+        for (auto& entry : userProcesses) {
+            sortedUsers.push_back(entry.first);
+        }
+        sort(sortedUsers.begin(), sortedUsers.end());
+
+        // Rotate dynamically after each process execution
+        if (!lastExecutedUser.empty()) {
+            auto it = find(sortedUsers.begin(), sortedUsers.end(), lastExecutedUser);
+            if (it != sortedUsers.end() && it + 1 != sortedUsers.end()) {
+                rotate(sortedUsers.begin(), it + 1, sortedUsers.end());
+            }
+        }
+
+        for (auto it = sortedUsers.begin(); it != sortedUsers.end(); ++it) {
+            string user = *it;
+            vector<Process*>& processes = userProcesses[user];
+
+            sort(processes.begin(), processes.end(), [](Process* a, Process* b) {
+                return a->readyTime < b->readyTime;
+            });
+
+            int processShare = userShare / processes.size();
+            if (processShare == 0) continue;
+
+            for (auto& process : processes) {
+                if (process->finished) continue;
+
+                int executionTime = min(process->remainingTime, processShare);
+                if (executionTime == 0) continue;
+
+                if (!process->started) {
+                    logEvent(currentTime, process->user, process->id, "Started");
+                    process->started = true;
+                }
+
+                logEvent(currentTime, process->user, process->id, "Resumed");
+                this_thread::sleep_for(chrono::seconds(executionTime));
+                process->remainingTime -= executionTime;
+                currentTime += executionTime;
+                logEvent(currentTime, process->user, process->id, "Paused");
+
+                if (process->remainingTime == 0) {
+                    process->finished = true;
+                    logEvent(currentTime, process->user, process->id, "Finished");
+                }
+
+                // **Update lastExecutedUser after every process execution**
+                lastExecutedUser = user;
+            }
+        }
+
+        // Ensure fairness by rotating users at the end of the cycle
+        if (!sortedUsers.empty()) {
+            rotate(sortedUsers.begin(), sortedUsers.begin() + 1, sortedUsers.end());
+        }
+
         allProcessesFinished = true;
-        for (auto &user : users)
-        {
-            for (auto *process : user.processes)
-            {
-                if (!process->finished)
-                {
+        for (auto& user : users) {
+            for (auto& process : user.processes) {
+                if (!process->finished) {
                     allProcessesFinished = false;
                     break;
                 }
             }
+            if (!allProcessesFinished) break;
         }
     }
 }
-void ReadInput(string filename)
-{
+
+// Read input from file
+void readInput(const string& filename, int& quantum) {
     ifstream inputFile(filename);
-
-    if (!inputFile.is_open())
-    {
-        cerr << "Error opening input file." << endl;
-        return;
+    if (!inputFile.is_open()) {
+        cerr << "Error: Could not open input file." << endl;
+        exit(EXIT_FAILURE);
     }
 
-    // Check if the file is empty
-    if (inputFile.peek() == ifstream::traits_type::eof())
-    {
-        cout << "File is empty" << endl;
-        return;
-    }
-
-    // Read time quantum as an integer (first line)
     string line;
-    if (getline(inputFile, line))
-    {
-        istringstream iss(line);
-        if (!(iss >> timeQuantum))
-        {
-            cerr << "Invalid time quantum format." << endl;
-            return;
-        }
-    }
+    getline(inputFile, line);
+    quantum = stoi(line);
 
-    // Read users and their processes
-    while (getline(inputFile, line))
-    {
-        istringstream iss(line);
-        string username;
-        int numberOfProcesses;
+    while (getline(inputFile, line)) {
+        stringstream ss(line);
+        string userName;
+        int processCount;
+        ss >> userName >> processCount;
 
-        if (!(iss >> username >> numberOfProcesses))
-            continue; // Read username and number of processes
+        User user;
+        user.name = userName;
 
-        users.push_back(User(username, numberOfProcesses)); // Add user to list
-        // Read processes for this user
-        for (int id = 0; id < numberOfProcesses; id++)
-        {
-
-            if (!getline(inputFile, line))
-                break; // Read process details
-
-            istringstream iss2(line);
+        for (int i = 0; i < processCount; i++) {
+            getline(inputFile, line);
+            stringstream ps(line);
             int readyTime, serviceTime;
-            if (iss2 >> readyTime >> serviceTime)
-            {
-                Process *process = new Process(username, id, readyTime, serviceTime);
-                users.back().addProcess(process);
-            }
-        }
-    }
+            ps >> readyTime >> serviceTime;
 
+            Process* process = new Process(userName, i, readyTime, serviceTime);
+            user.processes.push_back(process);
+        }
+
+        users.push_back(user);
+    }
     inputFile.close();
 }
 
-int main()
-{
-    ReadInput("Input.txt");
-    cout << timeQuantum << endl;
+// Main function
+int main() {
+    int quantum;
+    readInput("input.txt", quantum);
 
-    for (const User &user : users)
-    { // Loop through each user
-        cout << "User: " << user.name << "\n";
-
-        for (const Process *process : user.processes)
-        { // Loop through each process of the user
-            cout << "  Process ID: " << process->id
-                 << ", Ready Time: " << process->readyTime
-                 << ", Service Time: " << process->serviceTime
-                 << ", Remaining Time: " << process->remainingTime
-                 << "\n";
-        }
+    outputFile.open("output.txt", ios::out | ios::trunc);
+    if (!outputFile.is_open()) {
+        cerr << "Error: Could not open output file." << endl;
+        exit(EXIT_FAILURE);
     }
 
-    return 0;
+    thread schedulerThread(scheduler, quantum);
+    schedulerThread.join();
 
-    //    scheduler();
+    outputFile.close();
+    return 0;
 }
