@@ -181,7 +181,7 @@ public:
     void AdvanceTime() {
         current_time++;
     }
-    //Parsa//
+    //=====Parsa====//
     void swap(string newVarId, unsigned int newVal) { //Parsa
         string lruVarId = MainMemory.getLeastRecentlyUsed();
     
@@ -214,7 +214,7 @@ public:
                 return;
             }
         }
-    }//Parsa//
+    }//====Parsa====//
 };
 
 // Extension to MainMemory: allow access to internal pages
