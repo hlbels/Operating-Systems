@@ -8,6 +8,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <chrono>
+#include <atomic>
 
 using namespace std;
 using namespace chrono;
@@ -23,9 +24,10 @@ struct Process {
     int id;
     int startTime;
     int duration;
-    bool started, finished;
+    bool started = false;
+    bool finished = false;
     Process(int _id, int _start, int _dur)
-        : id(_id), startTime(_start), duration(_dur), started(false), finished(false) {}
+        : id(_id), startTime(_start), duration(_dur) {}
 };
 
 int cores;
@@ -34,25 +36,24 @@ vector<Variable> memory;
 unordered_map<string, pair<int, long>> disk;
 vector<Process> processes;
 vector<string> commands;
-ofstream out("output.txt");
-
-mutex logMutex, memoryMutex, schedulerMutex, commandMutex;
-condition_variable cv;
-int active = 0;
-queue<int> readyQueue;
-auto simulationStart = steady_clock::now();
 int globalCommandIndex = 0;
 
+ofstream out("output.txt");
+mutex logMutex, memoryMutex, commandMutex, schedulerMutex;
+atomic<long> logicalClock(0); // global clock ticking every 10ms
+
+int activeProcesses = 0;
+
 long currentTimeMs() {
-    return duration_cast<milliseconds>(steady_clock::now() - simulationStart).count();
+    return logicalClock.load();
 }
 
-void logEvent(const string& msg) {
+void logEvent(const string &msg) {
     lock_guard<mutex> lock(logMutex);
     out << "Clock: " << currentTimeMs() << ", " << msg << endl;
 }
 
-int findInMemory(const string& id) {
+int findInMemory(const string &id) {
     for (int i = 0; i < memory.size(); ++i)
         if (memory[i].occupied && memory[i].id == id)
             return i;
@@ -89,41 +90,39 @@ void loadDisk() {
 
 void saveDisk() {
     ofstream f("vm.txt");
-    for (auto& d : disk)
+    for (auto &d : disk)
         f << d.first << " " << d.second.first << " " << d.second.second << endl;
 }
 
-void store(const string& id, int value) {
+void store(const string &id, int val) {
     lock_guard<mutex> lock(memoryMutex);
     int pos = findInMemory(id);
     if (pos != -1) {
-        memory[pos].value = value;
+        memory[pos].value = val;
         memory[pos].lastAccess = currentTimeMs();
         return;
     }
     int free = findFreeSlot();
     if (free != -1) {
-        memory[free] = {id, value, currentTimeMs(), true};
+        memory[free] = {id, val, currentTimeMs(), true};
     } else {
-        loadDisk();
-        disk[id] = make_pair(value, currentTimeMs());
+        disk[id] = make_pair(val, currentTimeMs());
         saveDisk();
     }
 }
 
-void release(const string& id) {
+void release(const string &id) {
     lock_guard<mutex> lock(memoryMutex);
     int pos = findInMemory(id);
     if (pos != -1) {
         memory[pos].occupied = false;
     } else {
-        loadDisk();
         disk.erase(id);
         saveDisk();
     }
 }
 
-int lookup(const string& id) {
+int lookup(const string &id) {
     lock_guard<mutex> lock(memoryMutex);
     int pos = findInMemory(id);
     if (pos != -1) {
@@ -144,71 +143,74 @@ int lookup(const string& id) {
             return memory[lru].value;
         }
     }
+
     return -1;
 }
 
-void processThread(Process& p) {
-    while (currentTimeMs() < p.startTime * 1000) this_thread::sleep_for(milliseconds(1));
+void executeCommand(int pid) {
+    string line;
     {
-        lock_guard<mutex> lock(schedulerMutex);
-        readyQueue.push(p.id);
-        cv.notify_all();
+        lock_guard<mutex> lock(commandMutex);
+        line = commands[globalCommandIndex];
+        globalCommandIndex = (globalCommandIndex + 1) % commands.size();
     }
 
-    long start = currentTimeMs();
-    while (true) {
-        unique_lock<mutex> lock(schedulerMutex);
-        cv.wait(lock, [&] { return !readyQueue.empty() && readyQueue.front() == p.id && active < cores; });
+    stringstream ss(line);
+    string cmd;
+    ss >> cmd;
 
-        if (!p.started) {
+    if (cmd == "Store") {
+        string id;
+        int val;
+        ss >> id >> val;
+        store(id, val);
+        logEvent("Process " + to_string(pid + 1) + ", Store: Variable " + id + ", Value: " + to_string(val));
+    } else if (cmd == "Release") {
+        string id;
+        ss >> id;
+        release(id);
+        logEvent("Process " + to_string(pid + 1) + ", Release: Variable " + id);
+    } else if (cmd == "Lookup") {
+        string id;
+        ss >> id;
+        int val = lookup(id);
+        logEvent("Process " + to_string(pid + 1) + ", Lookup: Variable " + id + ", Value: " + to_string(val));
+    }
+}
+
+void processThread(Process &p) {
+    while (currentTimeMs() < p.startTime * 1000)
+        this_thread::sleep_for(milliseconds(10));
+
+    {
+        lock_guard<mutex> lock(schedulerMutex);
+        if (!p.started && activeProcesses < cores) {
             p.started = true;
+            activeProcesses++;
             logEvent("Process " + to_string(p.id + 1) + ": Started.");
         }
+    }
 
-        active++;
-        readyQueue.pop();
-        lock.unlock();
+    for (int i = 0; i < p.duration; ++i) {
+        while (currentTimeMs() % 1000 != 0)
+            this_thread::sleep_for(milliseconds(1));
 
-        // Execute commands based on 1 per second
-        for (int i = 0; i < p.duration; ++i) {
-            this_thread::sleep_for(milliseconds(1000));
+        this_thread::sleep_for(milliseconds(p.id * 10));  // stagger commands
+        executeCommand(p.id);
+    }
 
-            string line;
-            {
-                lock_guard<mutex> cmdLock(commandMutex);
-                line = commands[globalCommandIndex];
-                globalCommandIndex = (globalCommandIndex + 1) % commands.size();
-            }
+    this_thread::sleep_for(milliseconds(p.id * 10));
+    logEvent("Process " + to_string(p.id + 1) + ": Finished.");
 
-            stringstream ss(line);
-            string cmd;
-            ss >> cmd;
+    lock_guard<mutex> lock(schedulerMutex);
+    p.finished = true;
+    activeProcesses--;
+}
 
-            if (cmd == "Store") {
-                string id; int val;
-                ss >> id >> val;
-                store(id, val);
-                logEvent("Process " + to_string(p.id + 1) + ", Store: Variable " + id + ", Value: " + to_string(val));
-            } else if (cmd == "Release") {
-                string id;
-                ss >> id;
-                release(id);
-                logEvent("Process " + to_string(p.id + 1) + ", Release: Variable " + id);
-            } else if (cmd == "Lookup") {
-                string id;
-                ss >> id;
-                int val = lookup(id);
-                logEvent("Process " + to_string(p.id + 1) + ", Lookup: Variable " + id + ", Value: " + to_string(val));
-            }
-        }
-
-        logEvent("Process " + to_string(p.id + 1) + ": Finished.");
-
-        lock.lock();
-        active--;
-        p.finished = true;
-        cv.notify_all();
-        break;
+void clockThread() {
+    while (true) {
+        this_thread::sleep_for(milliseconds(10));
+        logicalClock += 10;
     }
 }
 
@@ -223,7 +225,7 @@ void loadInputs() {
     for (int i = 0; i < n; ++i) {
         int start, dur;
         proc >> start >> dur;
-        processes.push_back(Process(i, start, dur));
+        processes.emplace_back(i, start, dur);
     }
 
     ifstream cmd("commands.txt");
@@ -238,11 +240,14 @@ void loadInputs() {
 int main() {
     loadInputs();
 
+    thread clk(clockThread);
+    clk.detach(); // run in background forever
+
     vector<thread> threads;
     for (int i = 0; i < processes.size(); ++i)
         threads.emplace_back(processThread, ref(processes[i]));
 
-    for (auto& t : threads)
+    for (auto &t : threads)
         t.join();
 
     out.close();
