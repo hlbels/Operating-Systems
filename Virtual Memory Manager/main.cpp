@@ -1,387 +1,250 @@
 #include <iostream>
-#include <string>
-#include <vector>
-#include <thread>
-#include <atomic>
-#include <chrono>
 #include <fstream>
+#include <sstream>
+#include <vector>
+#include <queue>
+#include <unordered_map>
+#include <thread>
 #include <mutex>
 #include <condition_variable>
-#include <sstream>
+#include <chrono>
 
 using namespace std;
+using namespace chrono;
 
-struct Page
-{
-    string variableId;
-    unsigned int value;
-    unsigned int LastAccessValue;
+struct Variable {
+    string id;
+    int value;
+    long lastAccess;
+    bool occupied;
 };
-class MainMemory
-{
-private:
-    int size;
-    bool isFull = false;
-    vector<Page *> pages;
 
-public:
-    MainMemory(int size) : size(size) {};
-    void readPage(Page *page) { pages.push_back(page); };
-    void writePage(Page *page) { pages.push_back(page); };
-    void searchPage(Page *page) { pages.push_back(page); };
-    bool IsFull() { return isFull; };
-    void setIsFull(bool val) { isFull = val; }
-    vector<Page*>& getPages();//Parsa
-    string getLeastRecentlyUsed() { //Parsa
-        unsigned int minTime = UINT_MAX;
-        string lruVar;
-        for (auto& page : pages) {
-            if (page->LastAccessValue < minTime) {
-                minTime = page->LastAccessValue;
-                lruVar = page->variableId;
-            }
-        }
-        return lruVar;
-    }
-    
-};
-class DiskMemory
-{
-private:
-   string FileName;
-
-public:
-    DiskMemory() {};
-    void readPage(Page *page) {  }; //file operations
-    void writePage(Page *page) { //Parsa
-        ofstream file("vm.txt", ios::app); // 'app' = append mode
-
-    if (!file.is_open()) {
-        cout << "Failed to open vm.txt for writing." << endl;
-        return;
-    }
-
-    file << page->variableId << ":" << page->value << endl;
-    file.close();
-
-    cout << "Stored variable " << page->variableId
-         << " with value " << page->value << " on disk." << endl;
-     };
-    void searchPage(Page *page) { };
-    void readPageFromFile(const string& variableId); //Parsa
-    void printDiskContents() { //Parsa
-        ifstream file("vm.txt");
-
-    if (!file.is_open()) {
-        cout << "Failed to open vm.txt." << endl;
-        return;
-    }
-
-    string line;
-    while (getline(file, line)) {
-        size_t pos = line.find(':');
-        if (pos != string::npos) {
-            string variableId = line.substr(0, pos);
-            string value = line.substr(pos + 1);
-            cout << "Variable: " << variableId << ", Value: " << value << endl;
-        }
-    }
-
-    file.close();
-    }
-};
-class VirtualMemoryManager
-{
-public:
-    int current_time;
-    MainMemory MainMemory;
-    DiskMemory DiskMemory;
-    // Implementation 3 main commands
-    void Store(string variableId, unsigned int value)
-    {
-        Page page;
-        page.variableId = variableId;
-        page.value = value;
-        page.LastAccessValue = current_time;
-        if (!MainMemory.IsFull())
-        {
-            MainMemory.readPage(&page);
-        }
-        else
-        {
-            cout << "Memory is full , your variable will be stored on the disk";
-            DiskMemory.readPage(&page);
-        }
-        
-    }
-};
-class Process
-{
-public:
+struct Process {
     int id;
-    int start, BurstTime;
-    bool isReady = false, isFinished = false;
-
-public:
-    void SetReady() { isReady = true; }
-    void SetFinished() { isFinished = true; }
-    bool IsReady(atomic<int> &currentTime) { return currentTime <= start; }
-    bool HasFinished(atomic<int> &currentTime) { return BurstTime==0; };
-    Process(int id, int start, int BurstTime)
-        : id(id), start(start), BurstTime(BurstTime) {}
-
+    int startTime;
+    int duration;
+    bool started, finished;
+    Process(int _id, int _start, int _dur)
+        : id(_id), startTime(_start), duration(_dur), started(false), finished(false) {}
 };
 
-// ===== Hala's Contribution =====
+int cores;
+int memoryPages;
+vector<Variable> memory;
+unordered_map<string, pair<int, long>> disk;
+vector<Process> processes;
+vector<string> commands;
+ofstream out("output.txt");
 
-class VirtualMemoryManager {
-public:
-    int current_time = 0;
-    MainMemory MainMemory;
-    DiskMemory DiskMemory;
+mutex logMutex, memoryMutex, schedulerMutex, commandMutex;
+condition_variable cv;
+int active = 0;
+queue<int> readyQueue;
+auto simulationStart = steady_clock::now();
+int globalCommandIndex = 0;
 
-    VirtualMemoryManager(int memSize) : MainMemory(memSize) {}
-
-    void Store(string variableId, unsigned int value) {
-        Page* page = new Page{variableId, value, current_time};
-        
-        if (!MainMemory.IsFull()) {
-            MainMemory.readPage(page);
-        } else {
-            cout << "Main memory is full. Storing variable on disk." << endl;
-            DiskMemory.writePage(page); 
-        }
-    }
-
-    void Load(string variableId) {
-        for (auto& page : MainMemory.getPages()) {
-            if (page->variableId == variableId) {
-                page->LastAccessValue = current_time;
-                cout << "Loaded from main memory: " << variableId
-                     << " = " << page->value << endl;
-                return;
-            }
-        }
-        cout << "Page not found in main memory. Trying to load from disk..." << endl;
-        DiskMemory.readPageFromFile(variableId);
-    }
-
-    void PrintMemoryState() {
-        cout << "---------- Main Memory ----------" << endl;
-        for (auto& page : MainMemory.getPages()) {
-            cout << "Variable: " << page->variableId
-                 << ", Value: " << page->value
-                 << ", Last Access Time: " << page->LastAccessValue << endl;
-        }
-
-        cout << "---------- Disk Memory ----------" << endl;
-        DiskMemory.printDiskContents(); // To be implemented
-    }
-
-    void AdvanceTime() {
-        current_time++;
-    }
-    //=====Parsa====//
-    void swap(string newVarId, unsigned int newVal) { //Parsa
-        string lruVarId = MainMemory.getLeastRecentlyUsed();
-    
-        // Remove LRU page from memory
-        auto& pages = MainMemory.getPages();
-        for (auto it = pages.begin(); it != pages.end(); ++it) {
-            if ((*it)->variableId == lruVarId) {
-                // Move it to disk
-                DiskMemory.writePage(*it);
-                pages.erase(it);
-                break;
-            }
-        }
-    
-        // Add new page to memory
-        Page* newPage = new Page{newVarId, newVal, current_time};
-        MainMemory.readPage(newPage);
-    
-        cout << "Swapped out variable " << lruVarId
-             << " and loaded variable " << newVarId << " into memory." << endl;
-    }
-
-    void Release(string variableId) { //Parsa
-        auto& pages = MainMemory.getPages();
-        for (auto it = pages.begin(); it != pages.end(); ++it) {
-            if ((*it)->variableId == variableId) {
-                delete *it;
-                pages.erase(it);
-                cout << "Released variable " << variableId << " from main memory." << endl;
-                return;
-            }
-        }
-    }//====Parsa====//
-};
-
-// Extension to MainMemory: allow access to internal pages
-vector<Page*>& MainMemory::getPages() {
-    return pages;
+long currentTimeMs() {
+    return duration_cast<milliseconds>(steady_clock::now() - simulationStart).count();
 }
 
-// DiskMemory: function to simulate reading from disk
-void DiskMemory::readPageFromFile(const string& variableId) {
-    ifstream file("vm.txt");
-    if (!file.is_open()) {
-        cout << "Disk file not found!" << endl;
+void logEvent(const string& msg) {
+    lock_guard<mutex> lock(logMutex);
+    out << "Clock: " << currentTimeMs() << ", " << msg << endl;
+}
+
+int findInMemory(const string& id) {
+    for (int i = 0; i < memory.size(); ++i)
+        if (memory[i].occupied && memory[i].id == id)
+            return i;
+    return -1;
+}
+
+int findFreeSlot() {
+    for (int i = 0; i < memory.size(); ++i)
+        if (!memory[i].occupied)
+            return i;
+    return -1;
+}
+
+int findLRU() {
+    long minAccess = LONG_MAX;
+    int idx = -1;
+    for (int i = 0; i < memory.size(); ++i)
+        if (memory[i].occupied && memory[i].lastAccess < minAccess) {
+            minAccess = memory[i].lastAccess;
+            idx = i;
+        }
+    return idx;
+}
+
+void loadDisk() {
+    disk.clear();
+    ifstream f("vm.txt");
+    string id;
+    int val;
+    long last;
+    while (f >> id >> val >> last)
+        disk[id] = make_pair(val, last);
+}
+
+void saveDisk() {
+    ofstream f("vm.txt");
+    for (auto& d : disk)
+        f << d.first << " " << d.second.first << " " << d.second.second << endl;
+}
+
+void store(const string& id, int value) {
+    lock_guard<mutex> lock(memoryMutex);
+    int pos = findInMemory(id);
+    if (pos != -1) {
+        memory[pos].value = value;
+        memory[pos].lastAccess = currentTimeMs();
         return;
     }
-
-    string line;
-    bool found = false;
-
-    while (getline(file, line)) {
-        size_t pos = line.find(':');
-        if (pos != string::npos) {
-            string var = line.substr(0, pos);
-            string val = line.substr(pos + 1);
-            if (var == variableId) {
-                cout << "Loaded from disk: " << var << " = " << val << endl;
-                found = true;
-                break;
-            }
-        }
+    int free = findFreeSlot();
+    if (free != -1) {
+        memory[free] = {id, value, currentTimeMs(), true};
+    } else {
+        loadDisk();
+        disk[id] = make_pair(value, currentTimeMs());
+        saveDisk();
     }
-
-    if (!found) {
-        cout << "Variable not found on disk." << endl;
-    }
-
-    file.close();
 }
 
-//Parsa
-int main() {
-    //Read memory config
-    ifstream memFile("memconfig.txt");
-    int memSize;
-    memFile >> memSize;
-    memFile.close();
+void release(const string& id) {
+    lock_guard<mutex> lock(memoryMutex);
+    int pos = findInMemory(id);
+    if (pos != -1) {
+        memory[pos].occupied = false;
+    } else {
+        loadDisk();
+        disk.erase(id);
+        saveDisk();
+    }
+}
 
-    VirtualMemoryManager vmm(memSize);
-
-    //Read process and core info
-    ifstream procFile("processes.txt");
-    int coreCount;
-    int processCount;
-
-    procFile >> coreCount >> processCount;
-
-    vector<Process*> processes;
-    for (int i = 0; i < processCount; ++i) {
-        int start;
-        int duration;
-        procFile >> start >> duration;
-        processes.push_back(new Process(i + 1, start, duration));
+int lookup(const string& id) {
+    lock_guard<mutex> lock(memoryMutex);
+    int pos = findInMemory(id);
+    if (pos != -1) {
+        memory[pos].lastAccess = currentTimeMs();
+        return memory[pos].value;
     }
 
-    procFile.close();
-
-    //Read commands
-    ifstream cmdFile("commands.txt");
-    vector<string> commands;
-    string line;
-    while (getline(cmdFile, line)) {
-        if (!line.empty()) {
-            commands.push_back(line);
+    loadDisk();
+    if (disk.count(id)) {
+        int lru = findLRU();
+        if (lru != -1) {
+            string replaced = memory[lru].id;
+            disk[replaced] = make_pair(memory[lru].value, memory[lru].lastAccess);
+            memory[lru] = {id, disk[id].first, currentTimeMs(), true};
+            logEvent("Memory Manager, SWAP: Variable " + id + " with Variable " + replaced);
+            disk.erase(id);
+            saveDisk();
+            return memory[lru].value;
         }
     }
-    cmdFile.close();
+    return -1;
+}
 
-    //Clock thread
-    atomic<int> clock(0);
-    thread clockThread([&clock]() {
-        while(true) {
-            this_thread::sleep_for(chrono::milliseconds(1000));
-            ++clock;
+void processThread(Process& p) {
+    while (currentTimeMs() < p.startTime * 1000) this_thread::sleep_for(milliseconds(1));
+    {
+        lock_guard<mutex> lock(schedulerMutex);
+        readyQueue.push(p.id);
+        cv.notify_all();
+    }
+
+    long start = currentTimeMs();
+    while (true) {
+        unique_lock<mutex> lock(schedulerMutex);
+        cv.wait(lock, [&] { return !readyQueue.empty() && readyQueue.front() == p.id && active < cores; });
+
+        if (!p.started) {
+            p.started = true;
+            logEvent("Process " + to_string(p.id + 1) + ": Started.");
         }
-    });
 
-    //Scheduler thread
-    mutex coutMutex;
-    atomic<int> activeCores(0);
-    condition_variable cv;
-    vector<thread> processThread;
+        active++;
+        readyQueue.pop();
+        lock.unlock();
 
-    thread schedulerThread([&]() {
-        size_t currentIndex = 0;
-        while (currentIndex < processes.size()) {
-            if (activeCores < coreCount) {
-                Process* p = processes[currentIndex];
-                if (clock >= p->start) {
-                    activeCores++;
-                    processThread.emplace_back([&, p]() {
-                        {
-                            lock_guard<mutex> lock(coutMutex);
-                            cout << "Clock: " << clock << ", Process " << p->id << ": Started." << endl;
-                        }
+        // Execute commands based on 1 per second
+        for (int i = 0; i < p.duration; ++i) {
+            this_thread::sleep_for(milliseconds(1000));
 
-                        auto startTime = clock.load();
-                        int commandIndex = 0;
-
-                        while (clock - startTime < p->BurstTime) {
-                            string cmd = commands[commandIndex];
-                            istringstream iss(cmd);
-                            string action, varId;
-                            unsigned int val;
-
-                            iss >> action >> varId;
-                            
-                            if (action == "Store") {
-                                iss >> val;
-                                vmm.Store(varId, val);
-                                {
-                                    lock_guard<mutex> lock(coutMutex);
-                                    cout << "Clock: " << clock << ", Process " << p->id
-                                         << ", Store: Variable " << varId << ", Value: " << val << endl;
-                                }
-                            } else if (action == "Lookup") {
-                                vmm.Load(varId);
-                                {
-                                    lock_guard<mutex> lock(coutMutex);
-                                    cout << "Clock: " << clock << ", Process " << p->id
-                                         << ", Lookup: Variable " << varId << endl;
-                                }
-                            } else if (action == "Release") {
-                                vmm.Release(varId);
-                                {
-                                    lock_guard<mutex> lock(coutMutex);
-                                    cout << "Clock: " << clock << ", Process " << p->id
-                                         << ", Release: Variable " << varId << endl;
-                                }
-                            }
-
-                            commandIndex = (commandIndex + 1) % commands.size();
-                            this_thread::sleep_for(chrono::milliseconds(rand() % 1000 + 1));
-                        }
-
-                        {
-                            lock_guard<mutex> lock(coutMutex);
-                            cout << "Clock: " << clock << ", Process " << p->id << ": Finished." << endl;
-                        }
-
-                        activeCores--;
-                    });
-
-                    currentIndex++;
-                }
+            string line;
+            {
+                lock_guard<mutex> cmdLock(commandMutex);
+                line = commands[globalCommandIndex];
+                globalCommandIndex = (globalCommandIndex + 1) % commands.size();
             }
 
-            this_thread::sleep_for(chrono::microseconds(100));
-        }
-    });
+            stringstream ss(line);
+            string cmd;
+            ss >> cmd;
 
-    schedulerThread.join();
-    for (auto& t : processThread) {
-        if (t.joinable()) t.join();
+            if (cmd == "Store") {
+                string id; int val;
+                ss >> id >> val;
+                store(id, val);
+                logEvent("Process " + to_string(p.id + 1) + ", Store: Variable " + id + ", Value: " + to_string(val));
+            } else if (cmd == "Release") {
+                string id;
+                ss >> id;
+                release(id);
+                logEvent("Process " + to_string(p.id + 1) + ", Release: Variable " + id);
+            } else if (cmd == "Lookup") {
+                string id;
+                ss >> id;
+                int val = lookup(id);
+                logEvent("Process " + to_string(p.id + 1) + ", Lookup: Variable " + id + ", Value: " + to_string(val));
+            }
+        }
+
+        logEvent("Process " + to_string(p.id + 1) + ": Finished.");
+
+        lock.lock();
+        active--;
+        p.finished = true;
+        cv.notify_all();
+        break;
+    }
+}
+
+void loadInputs() {
+    ifstream mem("memconfig.txt");
+    mem >> memoryPages;
+    memory.resize(memoryPages);
+
+    ifstream proc("processes.txt");
+    int n;
+    proc >> cores >> n;
+    for (int i = 0; i < n; ++i) {
+        int start, dur;
+        proc >> start >> dur;
+        processes.push_back(Process(i, start, dur));
     }
 
-    clockThread.detach(); //Not sure if needed
+    ifstream cmd("commands.txt");
+    string line;
+    while (getline(cmd, line))
+        if (!line.empty()) commands.push_back(line);
 
+    ofstream clear("vm.txt");
+    clear.close();
+}
 
+int main() {
+    loadInputs();
 
+    vector<thread> threads;
+    for (int i = 0; i < processes.size(); ++i)
+        threads.emplace_back(processThread, ref(processes[i]));
+
+    for (auto& t : threads)
+        t.join();
+
+    out.close();
     return 0;
 }
